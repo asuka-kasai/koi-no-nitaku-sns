@@ -272,6 +272,21 @@ def main():
             print(f"  [{ok}] {st} {ct} {ln}B {u}")
         print(f"AI ラベル(is_ai_generated): {'付ける' if AI_LABEL else '付けない'}")
         print(f"キャプション({len(target['caption'])}字):\n{target['caption']}")
+        # トークンの確認(読むだけ。投稿はしない)。トークンの値は表示しない
+        if TOKEN and IGID:
+            try:
+                me = api("me", {"fields": "user_id,username"}, method="GET")
+                same = "一致" if str(me.get("user_id")) == str(IGID) else "不一致"
+                print(f"トークン: OK @{me.get('username')} (IG_USER_ID と{same})")
+                lim = api(f"{IGID}/content_publishing_limit", {"fields": "quota_usage,config"}, method="GET")
+                print(f"投稿の権限: OK {json.dumps(lim.get('data', lim), ensure_ascii=False)[:200]}")
+                hit = already_on_ig(target)
+                print(f"同じ1行目の投稿: {'あり ' + str(hit.get('permalink')) if hit else 'なし'}")
+            except Exception as e:
+                print(f"トークン: NG {e}")
+                sys.exit(1)
+        else:
+            print("トークン: 未設定(確認していません)")
         print("\n[dry-run] 投稿はしていません")
         return
 

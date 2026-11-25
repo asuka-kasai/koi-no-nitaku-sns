@@ -61,6 +61,8 @@ jobs:
           NOW: ${{ inputs.now }}
           DRY: ${{ inputs.dry_run }}
           MEDIA_BASE: ${{ vars.MEDIA_BASE }}
+          IG_ACCESS_TOKEN: ${{ inputs.dry_run == true && secrets.IG_ACCESS_TOKEN || '' }}
+          IG_USER_ID: ${{ inputs.dry_run == true && secrets.IG_USER_ID || '' }}
         run: |
           args="--plan"
           [ "$DRY" = "true" ] && args="--dry-run"
