@@ -1,0 +1,114 @@
+name: Instagram リール投稿(恋の二択)
+
+# どの起動でも「今日が date で、その枠の開始時刻を過ぎていて、未投稿」の1本だけを出す。
+#   noon 枠 = 10:00 JST から / night 枠 = 18:00 JST から(publish.py の SLOT_START)
+# GitHub の cron は数時間遅れることがある(2026-11 実測: 7〜8時間)。枠を複数置いて、
+# どれかが届けば出る。出した後に届いた枠は published/ を見て数秒で終わる。
+# 遅れて日をまたいだ起動は、前日ぶんの未投稿を先に出す(3日以上前のものは出さず警告)。
+on:
+  schedule:
+    - cron: "0 1 * * *"    # 10:00 JST
+    - cron: "0 2 * * *"    # 11:00 JST
+    - cron: "0 3 * * *"    # 12:00 JST
+    - cron: "0 4 * * *"    # 13:00 JST
+    - cron: "0 9 * * *"    # 18:00 JST
+    - cron: "0 10 * * *"   # 19:00 JST
+    - cron: "0 11 * * *"   # 20:00 JST
+    - cron: "0 12 * * *"   # 21:00 JST
+    - cron: "0 13 * * *"   # 22:00 JST
+    - cron: "0 14 * * *"   # 23:00 JST
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "投稿しない(対象の決定・URLの到達・キャプションの表示まで)"
+        type: boolean
+        default: true
+      id:
+        description: "臨時投稿する NN(例 05)。空なら日時どおり"
+        type: string
+        default: ""
+      now:
+        description: "dry_run のときだけ: 現在時刻の上書き(例 2026-11-26T18:05+09:00)"
+        type: string
+        default: ""
+
+permissions:
+  contents: write   # published/ の記録を push するため
+
+concurrency:
+  group: ig-post
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # media/(約135MB)は取らない。投稿は公開 URL を渡すので手元に動画は要らない
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: published
+
+      - name: 予定表の検査
+        run: python3 check_schedule.py
+
+      - name: 対象を決める(なければここで終わり)
+        id: plan
+        env:
+          ID: ${{ inputs.id }}
+          NOW: ${{ inputs.now }}
+          DRY: ${{ inputs.dry_run }}
+          MEDIA_BASE: ${{ vars.MEDIA_BASE }}
+        run: |
+          args="--plan"
+          [ "$DRY" = "true" ] && args="--dry-run"
+          [ -n "$ID" ] && args="$args --id $ID"
+          [ "$DRY" = "true" ] && [ -n "$NOW" ] && args="$args --now $NOW"
+          python3 publish.py $args
+
+      - name: 最新の main を取り込み、投稿する
+        id: pub
+        if: steps.plan.outputs.target != '' && inputs.dry_run != true
+        env:
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          MEDIA_BASE: ${{ vars.MEDIA_BASE }}
+          IG_AI_LABEL: ${{ vars.IG_AI_LABEL || 'true' }}
+          ID: ${{ inputs.id }}
+        run: |
+          # 同時に走った別の起動が先に出していないか、最新の published で見直す
+          git pull -q --rebase origin main
+          if [ -n "$ID" ]; then python3 publish.py --id "$ID"; else python3 publish.py; fi
+
+      - name: 投稿の記録を push(リトライ3回)
+        id: rec
+        if: steps.pub.outputs.posted != ''
+        env:
+          NN: ${{ steps.pub.outputs.posted }}
+        run: |
+          git config user.name  "koi-no-nitaku-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "published/$NN.json"
+          git commit -q -m "record: $NN を投稿 [skip ci]"
+          for i in 1 2 3; do
+            git pull -q --rebase origin main && git push -q origin HEAD:main && { echo "記録を push しました"; exit 0; }
+            echo "push 失敗 $i/3"; sleep 10
+          done
+          echo "::error::投稿は成功、記録の push に失敗。published/$NN.json を artifact に残しました。手で published/ に置いて push してください(次の起動は Instagram 上のキャプション照合で二重投稿を避けます)"
+          exit 1
+
+      - name: 記録の push に失敗したら artifact に残す
+        if: failure() && steps.pub.outputs.posted != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: published-${{ steps.pub.outputs.posted }}
+          path: published/${{ steps.pub.outputs.posted }}.json
+
+      - name: トークンを延長(GH_PAT があれば Secret も更新・best-effort)
+        if: always() && steps.pub.outputs.posted != ''
+        env:
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: python3 refresh_token.py || true

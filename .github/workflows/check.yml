@@ -1,0 +1,20 @@
+name: 予定表の検査(check_schedule)
+# schedule.json や仕組みを変えて push した時点で検査する(投稿の時ではなく、入れた時に気づくため)
+on:
+  push:
+    branches: [main]
+    paths: ["schedule.json", "published/**", "*.py", ".github/workflows/**"]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          sparse-checkout: published
+      - run: python3 check_schedule.py
+      - run: python3 -m py_compile publish.py check_schedule.py refresh_token.py
+      - name: 選ばれ方の機械テスト(時刻を変えて14本の日・枠を確かめる)
+        run: python3 test_pick.py
